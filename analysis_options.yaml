@@ -1,0 +1,26 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/build/**"
+    - "**/.dart_tool/**"
+
+linter:
+  rules:
+    # Disabled rules
+    - avoid_print: false
+    - prefer_const_constructors: false
+    - prefer_const_constructors_in_immutables: false
+    - prefer_final_fields: false
+    - file_names: false
+    
+    # Enabled rules
+    - prefer_single_quotes
+    - always_use_package_imports
+    - avoid_relative_lib_imports
+    - use_key_in_widget_constructors
+    - prefer_const_declarations
+    - prefer_typing_uninitialized_variables
+    - unnecessary_nullable_for_final_variable_declarations

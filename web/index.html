@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="SocialNest">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="social_nest">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <title>social_nest</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <script src="main.dart.js" type="application/javascript"></script>
+  
+  <!-- Add Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+  
+  <script>
+    // Your web app's Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyAlm6Q5DpoDgYD2bhzdQ3n7B0oG1OsAV9E",
+      authDomain: "socialnest-ahmed.firebaseapp.com",
+      projectId: "socialnest-ahmed",
+      storageBucket: "socialnest-ahmed.firebasestorage.app",
+      messagingSenderId: "66708866665",
+      appId: "1:66708866665:web:04c786b456322b885404f8"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+  </script>
+</body>
+</html>

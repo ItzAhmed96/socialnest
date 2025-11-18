@@ -1,0 +1,51 @@
+name: social_nest
+description: A social learning platform for students
+
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Firebase Core
+  firebase_core: ^2.24.1
+  cloud_firestore: ^4.14.2
+  firebase_auth: ^4.17.3
+  firebase_storage: ^11.5.7
+  
+  # State Management
+  provider: ^6.1.1
+  
+  # Media & Images
+  image_picker: ^1.0.4
+  
+  # Google Sign-In (optional - for future use)
+  google_sign_in: ^6.1.5
+  
+  # UI Components
+  cupertino_icons: ^1.0.2
+  
+  # Badges for notification icons
+  badges: ^3.0.2
+  
+  # Image caching and loading
+  cached_network_image: ^3.3.0
+  
+  # Date formatting (for notifications)
+  intl: ^0.18.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/images/

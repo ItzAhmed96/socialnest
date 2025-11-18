@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "66708866665",
+    "project_id": "socialnest-ahmed",
+    "storage_bucket": "socialnest-ahmed.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:66708866665:android:f76b2ec26177999d5404f8",
+        "android_client_info": {
+          "package_name": "com.example.socialnest"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAqTie33Xe4lSIYDffle-LbHNw8waKqX-8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
