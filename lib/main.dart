@@ -4,17 +4,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_service.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/profile_screen.dart';
-import 'screens/create_screen.dart';
-import 'screens/friends_screen.dart';
-import 'screens/explore_screen.dart';
-import 'screens/login_screen.dart';
-import 'screens/register_screen.dart';
-import 'screens/comments_screen.dart';
-import 'screens/notifications_screen.dart';
-import 'screens/create_story_screen.dart';
-import 'screens/story_screen.dart';
-import 'screens/saved_posts_screen.dart'; // NEW
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -47,24 +36,16 @@ class SocialNestApp extends StatelessWidget {
       create: (context) => FirebaseService(),
       child: MaterialApp(
         title: 'SocialNest',
-        theme: ThemeData(
+        theme: ThemeData.dark().copyWith(
           primaryColor: const Color(0xFF7C3AED),
-          primaryColorDark: const Color(0xFF6D28D9),
-          primaryColorLight: const Color(0xFF8B5CF6),
           scaffoldBackgroundColor: const Color(0xFF0F172A),
-          colorScheme: const ColorScheme.dark(
-            primary: Color(0xFF7C3AED),
-            secondary: Color(0xFF06B6D4),
-            surface: Color(0xFF1E293B),
-            background: Color(0xFF0F172A),
-            onPrimary: Colors.white,
-            onSurface: Colors.white,
-          ),
-          useMaterial3: true,
           appBarTheme: const AppBarTheme(
             backgroundColor: Color(0xFF1E293B),
             elevation: 0,
-            centerTitle: true,
+          ),
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFF7C3AED),
+            secondary: Color(0xFF06B6D4),
           ),
         ),
         home: Consumer<FirebaseService>(
@@ -76,20 +57,6 @@ class SocialNestApp extends StatelessWidget {
             }
           },
         ),
-        routes: {
-          '/welcome': (context) => const WelcomeScreen(),
-          '/login': (context) => const LoginScreen(),
-          '/register': (context) => const RegisterScreen(),
-          '/home': (context) => const HomeScreen(),
-          '/profile': (context) => const ProfileScreen(),
-          '/create': (context) => const CreateScreen(),
-          '/friends': (context) => const FriendsScreen(),
-          '/explore': (context) => const ExploreScreen(),
-          '/notifications': (context) => const NotificationsScreen(),
-          '/create_story': (context) => const CreateStoryScreen(),
-          '/saved_posts': (context) => SavedPostsScreen(), // FIXED: Removed const
-          // Note: CommentsScreen and StoryScreen require parameters, so they should be navigated to using Navigator.push
-        },
       ),
     );
   }

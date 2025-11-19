@@ -10,7 +10,33 @@ import '../models/story_model.dart';
 class FirebaseService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+  
+  // NEW: Enhanced loading and error states
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
+  
+  String? _lastError;
+  String? get lastError => _lastError;
+  
+  void _setLoading(bool loading) {
+    _isLoading = loading;
+    notifyListeners();
+  }
+  
+  void _clearError() {
+    _lastError = null;
+  }
+  
+  void _setError(String error) {
+    _lastError = error;
+    if (kDebugMode) {
+      print('🔥 Firebase Error: $error');
+    }
+    notifyListeners();
+  }
 
+  // User getters
   User? get currentUser => _auth.currentUser;
   bool get isLoggedIn => _auth.currentUser != null;
   String? get userEmail => _auth.currentUser?.email;
@@ -20,6 +46,9 @@ class FirebaseService with ChangeNotifier {
   // ========== AUTHENTICATION METHODS ==========
 
   Future<bool> signUp(String email, String password, String displayName) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
         email: email,
@@ -48,19 +77,22 @@ class FirebaseService with ChangeNotifier {
 
       notifyListeners();
       return true;
-    } catch (e) {
-      if (kDebugMode) {
-        print('🔥 Firebase Sign Up Error: $e');
-      }
-      if (e is FirebaseAuthException) {
-        print('🔥 Firebase Auth Error Code: ${e.code}');
-        print('🔥 Firebase Auth Error Message: ${e.message}');
-      }
+    } on FirebaseAuthException catch (e) {
+      String errorMessage = _getAuthErrorMessage(e);
+      _setError(errorMessage);
       return false;
+    } catch (e) {
+      _setError('Registration failed. Please try again.');
+      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<bool> signIn(String email, String password) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       await _auth.signInWithEmailAndPassword(
         email: email,
@@ -68,38 +100,80 @@ class FirebaseService with ChangeNotifier {
       );
       notifyListeners();
       return true;
-    } catch (e) {
-      if (kDebugMode) {
-        print('Sign in error: $e');
-      }
+    } on FirebaseAuthException catch (e) {
+      String errorMessage = _getAuthErrorMessage(e);
+      _setError(errorMessage);
       return false;
+    } catch (e) {
+      _setError('Sign in failed. Please try again.');
+      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<void> signOut() async {
-    await _auth.signOut();
-    notifyListeners();
+    _setLoading(true);
+    _clearError();
+    
+    try {
+      await _auth.signOut();
+      notifyListeners();
+    } catch (e) {
+      _setError('Failed to sign out. Please try again.');
+    } finally {
+      _setLoading(false);
+    }
   }
 
+  String _getAuthErrorMessage(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'email-already-in-use':
+        return 'This email is already registered.';
+      case 'invalid-email':
+        return 'Please enter a valid email address.';
+      case 'operation-not-allowed':
+        return 'Email/password accounts are not enabled.';
+      case 'weak-password':
+        return 'Password is too weak. Please use a stronger password.';
+      case 'user-disabled':
+        return 'This account has been disabled.';
+      case 'user-not-found':
+        return 'No account found with this email.';
+      case 'wrong-password':
+        return 'Incorrect password. Please try again.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please try again later.';
+      default:
+        return 'An error occurred. Please try again.';
+    }
+  }
+
+  // ========== USER PROFILE METHODS ==========
+
   Future<Map<String, dynamic>?> getUserData() async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return null;
       
       DocumentSnapshot userDoc = await _firestore.collection('users').doc(_auth.currentUser!.uid).get();
       return userDoc.data() as Map<String, dynamic>?;
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user data error: $e');
-      }
+      _setError('Failed to load user data.');
       return null;
     }
   }
 
-  // ========== PROFILE METHODS ==========
-
   Future<bool> updateProfile(String displayName, String bio) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to update your profile.');
+        return false;
+      }
 
       await _auth.currentUser!.updateDisplayName(displayName);
 
@@ -113,132 +187,155 @@ class FirebaseService with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Update profile error: $e');
-      }
+      _setError('Failed to update profile. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
+
+  // ========== POST SAVE/UNSAVE METHODS ==========
+
   Future<bool> savePost(String postId) async {
-  try {
-    if (_auth.currentUser == null) return false;
-
-    final userRef = _firestore.collection('users').doc(_auth.currentUser!.uid);
-    final savedPostRef = userRef.collection('saved_posts').doc(postId);
-
-    // Check if already saved
-    final savedDoc = await savedPostRef.get();
-    if (savedDoc.exists) {
-      return true; // Already saved
-    }
-
-    // Get post data for preview
-    final postDoc = await _firestore.collection('posts').doc(postId).get();
-    if (!postDoc.exists) return false;
-
-    final postData = postDoc.data() as Map<String, dynamic>;
-
-    // Save to user's saved_posts
-    await savedPostRef.set({
-      'postId': postId,
-      'savedAt': FieldValue.serverTimestamp(),
-      'postType': postData['type'] ?? 'social',
-      'postPreview': postData['content'] != null 
-          ? (postData['content'] as String).length > 100 
-            ? '${(postData['content'] as String).substring(0, 100)}...'
-            : postData['content']
-          : 'Saved post',
-      'userName': postData['userName'],
-      'userAvatar': postData['userAvatar'],
-      'imageUrl': postData['imageUrl'],
-    });
-
-    // Update post's save count
-    await _firestore.collection('posts').doc(postId).update({
-      'saveCount': FieldValue.increment(1),
-    });
-
-    await addUserActivity(
-      'post_saved',
-      'Post Saved',
-      'You saved a post to your collection',
-      data: {'postId': postId},
-    );
-
-    notifyListeners();
-    return true;
-  } catch (e) {
-    if (kDebugMode) {
-      print('Save post error: $e');
-    }
-    return false;
-  }
-}
-
-Future<bool> unsavePost(String postId) async {
-  try {
-    if (_auth.currentUser == null) return false;
-
-    await _firestore
-        .collection('users')
-        .doc(_auth.currentUser!.uid)
-        .collection('saved_posts')
-        .doc(postId)
-        .delete();
-
-    // Update post's save count
-    await _firestore.collection('posts').doc(postId).update({
-      'saveCount': FieldValue.increment(-1),
-    });
-
-    notifyListeners();
-    return true;
-  } catch (e) {
-    if (kDebugMode) {
-      print('Unsave post error: $e');
-    }
-    return false;
-  }
-}
-
-Stream<bool> getPostSaveStatus(String postId) {
-  try {
-    if (_auth.currentUser == null) return Stream.value(false);
+    _setLoading(true);
+    _clearError();
     
-    return _firestore
-        .collection('users')
-        .doc(_auth.currentUser!.uid)
-        .collection('saved_posts')
-        .doc(postId)
-        .snapshots()
-        .map((snapshot) => snapshot.exists);
-  } catch (e) {
-    if (kDebugMode) {
-      print('Get post save status error: $e');
-    }
-    return Stream.value(false);
-  }
-}
+    try {
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to save posts.');
+        return false;
+      }
 
-Stream<QuerySnapshot> getSavedPosts() {
-  try {
-    if (_auth.currentUser == null) {
+      final userRef = _firestore.collection('users').doc(_auth.currentUser!.uid);
+      final savedPostRef = userRef.collection('saved_posts').doc(postId);
+
+      // Check if already saved
+      final savedDoc = await savedPostRef.get();
+      if (savedDoc.exists) {
+        return true; // Already saved
+      }
+
+      // Get post data for preview
+      final postDoc = await _firestore.collection('posts').doc(postId).get();
+      if (!postDoc.exists) {
+        _setError('Post not found.');
+        return false;
+      }
+
+      final postData = postDoc.data() as Map<String, dynamic>;
+
+      // Save to user's saved_posts
+      await savedPostRef.set({
+        'postId': postId,
+        'savedAt': FieldValue.serverTimestamp(),
+        'postType': postData['type'] ?? 'social',
+        'postPreview': postData['content'] != null 
+            ? (postData['content'] as String).length > 100 
+              ? '${(postData['content'] as String).substring(0, 100)}...'
+              : postData['content']
+            : 'Saved post',
+        'userName': postData['userName'],
+        'userAvatar': postData['userAvatar'],
+        'imageUrl': postData['imageUrl'],
+      });
+
+      // Update post's save count
+      await _firestore.collection('posts').doc(postId).update({
+        'saveCount': FieldValue.increment(1),
+      });
+
+      await addUserActivity(
+        'post_saved',
+        'Post Saved',
+        'You saved a post to your collection',
+        data: {'postId': postId},
+      );
+
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setError('Failed to save post. Please try again.');
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  Future<bool> unsavePost(String postId) async {
+    _setLoading(true);
+    _clearError();
+    
+    try {
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to unsave posts.');
+        return false;
+      }
+
+      await _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('saved_posts')
+          .doc(postId)
+          .delete();
+
+      // Update post's save count
+      await _firestore.collection('posts').doc(postId).update({
+        'saveCount': FieldValue.increment(-1),
+      });
+
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setError('Failed to unsave post. Please try again.');
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  Stream<bool> getPostSaveStatus(String postId) {
+    try {
+      if (_auth.currentUser == null) return Stream.value(false);
+      
+      return _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('saved_posts')
+          .doc(postId)
+          .snapshots()
+          .map((snapshot) => snapshot.exists)
+          .handleError((error) {
+            _setError('Failed to check save status.');
+            return false;
+          });
+    } catch (e) {
+      _setError('Failed to get save status.');
+      return Stream.value(false);
+    }
+  }
+
+  Stream<QuerySnapshot> getSavedPosts() {
+    try {
+      if (_auth.currentUser == null) {
+        return const Stream.empty();
+      }
+      
+      return _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('saved_posts')
+          .orderBy('savedAt', descending: true)
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load saved posts.');
+            return const Stream.empty();
+          });
+    } catch (e) {
+      _setError('Failed to get saved posts.');
       return const Stream.empty();
     }
-    
-    return _firestore
-        .collection('users')
-        .doc(_auth.currentUser!.uid)
-        .collection('saved_posts')
-        .orderBy('savedAt', descending: true)
-        .snapshots();
-  } catch (e) {
-    if (kDebugMode) {
-      print('Get saved posts error: $e');
-    }
-    return const Stream.empty();
   }
-}
+
   // ========== USER STATS & PROGRESS METHODS ==========
 
   Future<void> updateUserStats({
@@ -248,6 +345,8 @@ Stream<QuerySnapshot> getSavedPosts() {
     int? notesCreated,
     int? points,
   }) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -266,15 +365,15 @@ Stream<QuerySnapshot> getSavedPosts() {
         notifyListeners();
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Update user stats error: $e');
-      }
+      _setError('Failed to update user stats.');
     }
   }
 
   // ========== ACTIVITY METHODS ==========
 
   Future<void> addUserActivity(String type, String title, String description, {Map<String, dynamic>? data}) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -290,9 +389,7 @@ Stream<QuerySnapshot> getSavedPosts() {
             'timestamp': FieldValue.serverTimestamp(),
           });
     } catch (e) {
-      if (kDebugMode) {
-        print('Add user activity error: $e');
-      }
+      _setError('Failed to add activity.');
     }
   }
 
@@ -308,11 +405,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('recent_activities')
           .orderBy('timestamp', descending: true)
           .limit(10)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load activities.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user activities error: $e');
-      }
+      _setError('Failed to get user activities.');
       return const Stream.empty();
     }
   }
@@ -320,6 +419,8 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== ACHIEVEMENT METHODS ==========
 
   Future<void> unlockAchievement(String achievementId, String title, String description, int points) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -356,9 +457,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         notifyListeners();
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Unlock achievement error: $e');
-      }
+      _setError('Failed to unlock achievement.');
     }
   }
 
@@ -373,11 +472,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .doc(_auth.currentUser!.uid)
           .collection('achievements')
           .orderBy('unlockedAt', descending: true)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load achievements.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user achievements error: $e');
-      }
+      _setError('Failed to get user achievements.');
       return const Stream.empty();
     }
   }
@@ -385,8 +486,14 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== STUDY GROUP METHODS ==========
 
   Future<bool> createStudyGroup(String name, String description, String subject, List<String> tags) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to create a study group.');
+        return false;
+      }
 
       final userData = await getUserData();
       final groupId = _firestore.collection('study_groups').doc().id;
@@ -427,21 +534,30 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Create study group error: $e');
-      }
+      _setError('Failed to create study group. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<bool> joinStudyGroup(String groupId) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to join a study group.');
+        return false;
+      }
 
       final userData = await getUserData();
       final groupDoc = await _firestore.collection('study_groups').doc(groupId).get();
       
-      if (!groupDoc.exists) return false;
+      if (!groupDoc.exists) {
+        _setError('Study group not found.');
+        return false;
+      }
 
       await _firestore
           .collection('study_groups')
@@ -473,10 +589,10 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Join study group error: $e');
-      }
+      _setError('Failed to join study group. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -490,11 +606,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('study_groups')
           .where('members', arrayContains: _auth.currentUser!.uid)
           .orderBy('updatedAt', descending: true)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load study groups.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user study groups error: $e');
-      }
+      _setError('Failed to get user study groups.');
       return const Stream.empty();
     }
   }
@@ -505,11 +623,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('study_groups')
           .orderBy('memberCount', descending: true)
           .limit(50)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load study groups.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get all study groups error: $e');
-      }
+      _setError('Failed to get all study groups.');
       return const Stream.empty();
     }
   }
@@ -523,8 +643,14 @@ Stream<QuerySnapshot> getSavedPosts() {
     String? subject,
     List<String> tags = const [],
   }) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to create a post.');
+        return false;
+      }
 
       Map<String, dynamic>? userData = await getUserData();
       
@@ -543,6 +669,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         'likes': 0,
         'comments': 0,
         'shares': 0,
+        'saveCount': 0,
         'timestamp': FieldValue.serverTimestamp(),
       });
 
@@ -557,10 +684,10 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Create post error: $e');
-      }
+      _setError('Failed to create post. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -570,8 +697,14 @@ Stream<QuerySnapshot> getSavedPosts() {
     required String subject,
     List<String> tags = const [],
   }) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to create a quiz.');
+        return false;
+      }
 
       Map<String, dynamic>? userData = await getUserData();
       
@@ -601,6 +734,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         'likes': 0,
         'comments': 0,
         'shares': 0,
+        'saveCount': 0,
         'timestamp': FieldValue.serverTimestamp(),
       });
 
@@ -615,10 +749,10 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Create quiz post error: $e');
-      }
+      _setError('Failed to create quiz. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -627,11 +761,13 @@ Stream<QuerySnapshot> getSavedPosts() {
       return _firestore
           .collection('posts')
           .orderBy('timestamp', descending: true)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load posts.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get posts error: $e');
-      }
+      _setError('Failed to get posts.');
       return const Stream.empty();
     }
   }
@@ -642,11 +778,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('posts')
           .where('userId', isEqualTo: userId)
           .orderBy('timestamp', descending: true)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load user posts.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user posts error: $e');
-      }
+      _setError('Failed to get user posts.');
       return const Stream.empty();
     }
   }
@@ -654,18 +792,28 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== QUIZ METHODS ==========
 
   Future<bool> voteOnQuiz(String postId, String selectedOption) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to vote.');
+        return false;
+      }
 
       final currentUserId = _auth.currentUser!.uid;
 
       final postDoc = await _firestore.collection('posts').doc(postId).get();
-      if (!postDoc.exists) return false;
+      if (!postDoc.exists) {
+        _setError('Quiz not found.');
+        return false;
+      }
       
       final postData = postDoc.data() as Map<String, dynamic>;
       
       final List<dynamic> votedUsers = postData['votedUsers'] ?? [];
       if (votedUsers.contains(currentUserId)) {
+        _setError('You have already voted on this quiz.');
         return false;
       }
 
@@ -677,17 +825,22 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Vote on quiz error: $e');
-      }
+      _setError('Failed to vote on quiz. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<Map<String, dynamic>?> getQuizResults(String postId) async {
+    _clearError();
+    
     try {
       final postDoc = await _firestore.collection('posts').doc(postId).get();
-      if (!postDoc.exists) return null;
+      if (!postDoc.exists) {
+        _setError('Quiz not found.');
+        return null;
+      }
       
       final postData = postDoc.data() as Map<String, dynamic>;
       return {
@@ -696,9 +849,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         'hasVoted': (postData['votedUsers'] ?? []).contains(_auth.currentUser?.uid),
       };
     } catch (e) {
-      if (kDebugMode) {
-        print('Get quiz results error: $e');
-      }
+      _setError('Failed to get quiz results.');
       return null;
     }
   }
@@ -706,6 +857,8 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== LIKE SYSTEM ==========
 
   Future<void> likePost(String postId) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -759,9 +912,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         }
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Like post error: $e');
-      }
+      _setError('Failed to like post. Please try again.');
     }
   }
 
@@ -775,11 +926,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('likes')
           .doc(_auth.currentUser!.uid)
           .snapshots()
-          .map((snapshot) => snapshot.exists);
+          .map((snapshot) => snapshot.exists)
+          .handleError((error) {
+            _setError('Failed to check like status.');
+            return false;
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get post like status error: $e');
-      }
+      _setError('Failed to get post like status.');
       return Stream.value(false);
     }
   }
@@ -787,8 +940,14 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== COMMENT SYSTEM ==========
 
   Future<bool> addComment(String postId, String content) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return false;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to comment.');
+        return false;
+      }
 
       Map<String, dynamic>? userData = await getUserData();
       
@@ -842,10 +1001,10 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return true;
     } catch (e) {
-      if (kDebugMode) {
-        print('Add comment error: $e');
-      }
+      _setError('Failed to add comment. Please try again.');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -855,16 +1014,20 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('comments')
           .where('postId', isEqualTo: postId)
           .orderBy('timestamp', descending: false)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load comments.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get comments error: $e');
-      }
+      _setError('Failed to get comments.');
       return const Stream.empty();
     }
   }
 
   Future<void> likeComment(String commentId) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -894,9 +1057,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         });
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Like comment error: $e');
-      }
+      _setError('Failed to like comment. Please try again.');
     }
   }
 
@@ -910,16 +1071,21 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('likes')
           .doc(_auth.currentUser!.uid)
           .snapshots()
-          .map((snapshot) => snapshot.exists);
+          .map((snapshot) => snapshot.exists)
+          .handleError((error) {
+            _setError('Failed to check comment like status.');
+            return false;
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get comment like status error: $e');
-      }
+      _setError('Failed to get comment like status.');
       return Stream.value(false);
     }
   }
 
   Future<void> deleteComment(String commentId, String postId) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       await _firestore.collection('comments').doc(commentId).delete();
       
@@ -927,9 +1093,9 @@ Stream<QuerySnapshot> getSavedPosts() {
         'comments': FieldValue.increment(-1),
       });
     } catch (e) {
-      if (kDebugMode) {
-        print('Delete comment error: $e');
-      }
+      _setError('Failed to delete comment. Please try again.');
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -946,6 +1112,8 @@ Stream<QuerySnapshot> getSavedPosts() {
     String? targetId,
     Map<String, dynamic>? data,
   }) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -976,9 +1144,7 @@ Stream<QuerySnapshot> getSavedPosts() {
       });
 
     } catch (e) {
-      if (kDebugMode) {
-        print('Send notification error: $e');
-      }
+      _setError('Failed to send notification.');
     }
   }
 
@@ -993,16 +1159,20 @@ Stream<QuerySnapshot> getSavedPosts() {
           .doc(_auth.currentUser!.uid)
           .collection('notifications')
           .orderBy('timestamp', descending: true)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load notifications.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user notifications error: $e');
-      }
+      _setError('Failed to get user notifications.');
       return const Stream.empty();
     }
   }
 
   Future<void> markNotificationAsRead(String notificationId) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -1021,13 +1191,14 @@ Stream<QuerySnapshot> getSavedPosts() {
       });
 
     } catch (e) {
-      if (kDebugMode) {
-        print('Mark notification as read error: $e');
-      }
+      _setError('Failed to mark notification as read.');
     }
   }
 
   Future<void> markAllNotificationsAsRead() async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -1052,9 +1223,9 @@ Stream<QuerySnapshot> getSavedPosts() {
       });
 
     } catch (e) {
-      if (kDebugMode) {
-        print('Mark all notifications as read error: $e');
-      }
+      _setError('Failed to mark all notifications as read.');
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -1067,11 +1238,13 @@ Stream<QuerySnapshot> getSavedPosts() {
       return _firestore
           .collection('users')
           .doc(_auth.currentUser!.uid)
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load notification count.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get unread notification count error: $e');
-      }
+      _setError('Failed to get unread notification count.');
       return const Stream.empty();
     }
   }
@@ -1079,8 +1252,14 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== FRIENDS SYSTEM ==========
 
   Future<void> sendFriendRequest(String targetUserId, String targetUserName, String targetUserAvatar) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to send friend requests.');
+        return;
+      }
 
       final currentUserId = _auth.currentUser!.uid;
       
@@ -1091,7 +1270,10 @@ Stream<QuerySnapshot> getSavedPosts() {
           .where('status', isEqualTo: 'pending')
           .get();
 
-      if (existingRequest.docs.isNotEmpty) return;
+      if (existingRequest.docs.isNotEmpty) {
+        _setError('Friend request already sent.');
+        return;
+      }
 
       final currentUserData = await getUserData();
       
@@ -1127,18 +1309,27 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       notifyListeners();
     } catch (e) {
-      if (kDebugMode) {
-        print('Send friend request error: $e');
-      }
+      _setError('Failed to send friend request. Please try again.');
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<void> acceptFriendRequest(String requestId) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to accept friend requests.');
+        return;
+      }
 
       final requestDoc = await _firestore.collection('friend_requests').doc(requestId).get();
-      if (!requestDoc.exists) return;
+      if (!requestDoc.exists) {
+        _setError('Friend request not found.');
+        return;
+      }
       
       final requestData = requestDoc.data() as Map<String, dynamic>;
       final fromUserId = requestData['fromUserId'];
@@ -1203,28 +1394,37 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       notifyListeners();
     } catch (e) {
-      if (kDebugMode) {
-        print('Accept friend request error: $e');
-      }
+      _setError('Failed to accept friend request. Please try again.');
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<void> rejectFriendRequest(String requestId) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       await _firestore.collection('friend_requests').doc(requestId).update({
         'status': 'rejected',
       });
       notifyListeners();
     } catch (e) {
-      if (kDebugMode) {
-        print('Reject friend request error: $e');
-      }
+      _setError('Failed to reject friend request. Please try again.');
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<void> removeFriend(String friendUserId) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
-      if (_auth.currentUser == null) return;
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to remove friends.');
+        return;
+      }
 
       final currentUserId = _auth.currentUser!.uid;
 
@@ -1249,9 +1449,9 @@ Stream<QuerySnapshot> getSavedPosts() {
       await batch.commit();
       notifyListeners();
     } catch (e) {
-      if (kDebugMode) {
-        print('Remove friend error: $e');
-      }
+      _setError('Failed to remove friend. Please try again.');
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -1267,11 +1467,13 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('friend_requests')
           .where('toUserId', isEqualTo: currentUserId)
           .where('status', isEqualTo: 'pending')
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load friend requests.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get friend requests error: $e');
-      }
+      _setError('Failed to get friend requests.');
       return const Stream.empty();
     }
   }
@@ -1286,16 +1488,20 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('users')
           .doc(_auth.currentUser!.uid)
           .collection('friends')
-          .snapshots();
+          .snapshots()
+          .handleError((error) {
+            _setError('Failed to load friends.');
+            return const Stream.empty();
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get friends error: $e');
-      }
+      _setError('Failed to get friends.');
       return const Stream.empty();
     }
   }
 
   Future<List<Map<String, dynamic>>> searchUsers(String query) async {
+    _clearError();
+    
     try {
       if (query.isEmpty) return [];
 
@@ -1317,14 +1523,14 @@ Stream<QuerySnapshot> getSavedPosts() {
         };
       }).toList();
     } catch (e) {
-      if (kDebugMode) {
-        print('Search users error: $e');
-      }
+      _setError('Failed to search users.');
       return [];
     }
   }
 
   Future<Map<String, dynamic>?> getFriendStatus(String targetUserId) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return null;
 
@@ -1367,9 +1573,7 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       return {'status': 'not_friends'};
     } catch (e) {
-      if (kDebugMode) {
-        print('Get friend status error: $e');
-      }
+      _setError('Failed to get friend status.');
       return null;
     }
   }
@@ -1377,15 +1581,21 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== STORY METHODS ==========
 
   Future<String> uploadStoryImage(XFile imageFile) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       final String fileName = 'stories/${currentUser!.uid}/${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final Reference storageRef = FirebaseStorage.instance.ref().child(fileName);
+      final Reference storageRef = _storage.ref().child(fileName);
       final UploadTask uploadTask = storageRef.putFile(File(imageFile.path));
       final TaskSnapshot snapshot = await uploadTask;
       final String downloadUrl = await snapshot.ref.getDownloadURL();
       return downloadUrl;
     } catch (e) {
+      _setError('Failed to upload story image. Please try again.');
       throw Exception('Failed to upload story image: $e');
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -1395,7 +1605,15 @@ Stream<QuerySnapshot> getSavedPosts() {
     String? backgroundColor,
     String? textColor,
   }) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
+      if (_auth.currentUser == null) {
+        _setError('You must be logged in to create a story.');
+        return;
+      }
+
       final storyId = _firestore.collection('stories').doc().id;
       final now = DateTime.now();
       final expiresAt = now.add(const Duration(hours: 24));
@@ -1429,11 +1647,17 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       notifyListeners();
     } catch (e) {
+      _setError('Failed to create story. Please try again.');
       throw Exception('Failed to create story: $e');
+    } finally {
+      _setLoading(false);
     }
   }
 
   Future<void> deleteStory(String storyId) async {
+    _setLoading(true);
+    _clearError();
+    
     try {
       await _firestore
           .collection('stories')
@@ -1449,7 +1673,10 @@ Stream<QuerySnapshot> getSavedPosts() {
 
       notifyListeners();
     } catch (e) {
+      _setError('Failed to delete story. Please try again.');
       throw Exception('Failed to delete story: $e');
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -1464,11 +1691,12 @@ Stream<QuerySnapshot> getSavedPosts() {
         return snapshot.docs
             .map((doc) => Story.fromMap(doc.data() as Map<String, dynamic>))
             .toList();
+      }).handleError((error) {
+        _setError('Failed to load stories.');
+        return [];
       });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get stories error: $e');
-      }
+      _setError('Failed to get stories.');
       return Stream.value([]);
     }
   }
@@ -1485,16 +1713,19 @@ Stream<QuerySnapshot> getSavedPosts() {
         return snapshot.docs
             .map((doc) => Story.fromMap(doc.data() as Map<String, dynamic>))
             .toList();
+      }).handleError((error) {
+        _setError('Failed to load user stories.');
+        return [];
       });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get user stories error: $e');
-      }
+      _setError('Failed to get user stories.');
       return Stream.value([]);
     }
   }
 
   Future<bool> hasActiveStories(String userId) async {
+    _clearError();
+    
     try {
       final snapshot = await _firestore
           .collection('stories')
@@ -1505,9 +1736,7 @@ Stream<QuerySnapshot> getSavedPosts() {
       
       return snapshot.docs.isNotEmpty;
     } catch (e) {
-      if (kDebugMode) {
-        print('Check active stories error: $e');
-      }
+      _setError('Failed to check active stories.');
       return false;
     }
   }
@@ -1515,6 +1744,8 @@ Stream<QuerySnapshot> getSavedPosts() {
   // ========== STORY LIKE METHODS ==========
 
   Future<void> likeStory(String storyId, String storyOwnerId) async {
+    _clearError();
+    
     try {
       if (_auth.currentUser == null) return;
 
@@ -1564,9 +1795,7 @@ Stream<QuerySnapshot> getSavedPosts() {
         );
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Like story error: $e');
-      }
+      _setError('Failed to like story. Please try again.');
     }
   }
 
@@ -1580,12 +1809,35 @@ Stream<QuerySnapshot> getSavedPosts() {
           .collection('likes')
           .doc(_auth.currentUser!.uid)
           .snapshots()
-          .map((snapshot) => snapshot.exists);
+          .map((snapshot) => snapshot.exists)
+          .handleError((error) {
+            _setError('Failed to check story like status.');
+            return false;
+          });
     } catch (e) {
-      if (kDebugMode) {
-        print('Get story like status error: $e');
-      }
+      _setError('Failed to get story like status.');
       return Stream.value(false);
+    }
+  }
+
+  // NEW: Enhanced image upload for posts
+  Future<String> uploadImage(File imageFile, {String path = 'posts'}) async {
+    _setLoading(true);
+    _clearError();
+    
+    try {
+      final String fileName = '$path/${currentUser!.uid}/${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final Reference storageRef = _storage.ref().child(fileName);
+      final UploadTask uploadTask = storageRef.putFile(imageFile);
+      
+      final TaskSnapshot snapshot = await uploadTask;
+      final String downloadUrl = await snapshot.ref.getDownloadURL();
+      return downloadUrl;
+    } catch (e) {
+      _setError('Failed to upload image. Please try again.');
+      throw Exception('Image upload failed: $e');
+    } finally {
+      _setLoading(false);
     }
   }
 }
