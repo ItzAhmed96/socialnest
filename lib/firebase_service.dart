@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-
+import '../models/homework_model.dart'; // ADD THIS IMPORT
 import '../models/story_model.dart';
 
 class FirebaseService with ChangeNotifier {
@@ -42,7 +42,223 @@ class FirebaseService with ChangeNotifier {
   String? get userEmail => _auth.currentUser?.email;
   String? get userName => _auth.currentUser?.displayName;
   String? get userAvatar => _auth.currentUser?.displayName?[0] ?? _auth.currentUser?.email?[0];
+// ========== STUDY SESSION METHODS ==========
 
+Future<void> recordStudySession(double minutes) async {
+  _clearError();
+  
+  try {
+    if (_auth.currentUser == null) return;
+
+    final hours = minutes / 60.0;
+    
+    await updateUserStats(studyHours: hours);
+
+    await addUserActivity(
+      'study_session_completed',
+      'Study Session Completed',
+      'You studied for ${minutes.toStringAsFixed(0)} minutes',
+      data: {'minutes': minutes, 'hours': hours},
+    );
+
+    // Check for achievements
+    final userData = await getUserData();
+    final totalHours = userData?['studyHours'] ?? 0.0;
+    
+    if (totalHours >= 10) {
+      await unlockAchievement(
+        'study_marathon',
+        'Study Marathon',
+        'Complete 10 hours of focused study',
+        100,
+      );
+    }
+
+    notifyListeners();
+  } catch (e) {
+    _setError('Failed to record study session.');
+  }
+}
+
+// ========== WEEKLY STATS METHODS ==========
+
+Stream<QuerySnapshot> getWeeklyStudySessions() {
+  try {
+    if (_auth.currentUser == null) {
+      return const Stream.empty();
+    }
+    
+    final now = DateTime.now();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    
+    return _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('study_sessions')
+        .where('timestamp', isGreaterThanOrEqualTo: startOfWeek)
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .handleError((error) {
+          _setError('Failed to load weekly sessions.');
+          return const Stream.empty();
+        });
+  } catch (e) {
+    _setError('Failed to get weekly study sessions.');
+    return const Stream.empty();
+  }
+}
+// ========== STUDY STATS METHODS ==========
+
+Future<Map<String, dynamic>> getStudyStatistics() async {
+  try {
+    if (_auth.currentUser == null) {
+      return {};
+    }
+
+    final userDoc = await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .get();
+
+    final userData = userDoc.data() as Map<String, dynamic>?;
+
+    // Get weekly sessions
+    final now = DateTime.now();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    
+    final weeklySessions = await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('study_sessions')
+        .where('timestamp', isGreaterThanOrEqualTo: startOfWeek)
+        .get();
+
+    double weeklyHours = 0;
+    for (final session in weeklySessions.docs) {
+      weeklyHours += (session.data()['hours'] ?? 0).toDouble();
+    }
+
+    return {
+      'totalStudyHours': userData?['studyHours'] ?? 0.0,
+      'weeklyStudyHours': weeklyHours,
+      'quizzesCompleted': userData?['quizzesCompleted'] ?? 0,
+      'notesCreated': userData?['notesCreated'] ?? 0,
+      'postsCount': userData?['postsCount'] ?? 0,
+      'homeworkCompleted': (userData?['studyHours'] ?? 0) * 2, // Estimate
+      'studyStreak': _calculateStudyStreak(weeklyHours),
+    };
+  } catch (e) {
+    _setError('Failed to load study statistics.');
+    return {};
+  }
+}
+
+int _calculateStudyStreak(double weeklyHours) {
+  // Simple streak calculation based on weekly hours
+  if (weeklyHours >= 10) return 7;
+  if (weeklyHours >= 7) return 5;
+  if (weeklyHours >= 5) return 3;
+  if (weeklyHours >= 2) return 1;
+  return 0;
+}
+// ========== STUDY NOTES METHODS ==========
+
+Future<bool> addStudyNote({
+  required String title,
+  required String content,
+  required String subject,
+}) async {
+  _setLoading(true);
+  _clearError();
+  
+  try {
+    if (_auth.currentUser == null) {
+      _setError('You must be logged in to add notes.');
+      return false;
+    }
+
+    final noteId = DateTime.now().millisecondsSinceEpoch.toString();
+    
+    await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('study_notes')
+        .doc(noteId)
+        .set({
+          'id': noteId,
+          'title': title,
+          'content': content,
+          'subject': subject,
+          'createdAt': DateTime.now().millisecondsSinceEpoch,
+        });
+
+    await updateUserStats(notesCreated: 1);
+
+    await addUserActivity(
+      'note_created',
+      'Study Note Created',
+      'You created: $title',
+      data: {'noteId': noteId, 'subject': subject},
+    );
+
+    notifyListeners();
+    return true;
+  } catch (e) {
+    _setError('Failed to add study note. Please try again.');
+    return false;
+  } finally {
+    _setLoading(false);
+  }
+}
+
+Stream<QuerySnapshot> getStudyNotes() {
+  try {
+    if (_auth.currentUser == null) {
+      return const Stream.empty();
+    }
+    
+    return _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('study_notes')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .handleError((error) {
+          _setError('Failed to load study notes.');
+          return const Stream.empty();
+        });
+  } catch (e) {
+    _setError('Failed to get study notes.');
+    return const Stream.empty();
+  }
+}
+
+Future<bool> deleteStudyNote(String noteId) async {
+  _setLoading(true);
+  _clearError();
+  
+  try {
+    if (_auth.currentUser == null) {
+      _setError('You must be logged in to delete notes.');
+      return false;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('study_notes')
+        .doc(noteId)
+        .delete();
+
+    notifyListeners();
+    return true;
+  } catch (e) {
+    _setError('Failed to delete study note. Please try again.');
+    return false;
+  } finally {
+    _setLoading(false);
+  }
+}
   // ========== AUTHENTICATION METHODS ==========
 
   Future<bool> signUp(String email, String password, String displayName) async {
@@ -1741,6 +1957,146 @@ class FirebaseService with ChangeNotifier {
     }
   }
 
+  // ========== HOMEWORK METHODS ==========
+
+Future<bool> addHomework(Homework homework) async {
+  _setLoading(true);
+  _clearError();
+  
+  try {
+    if (_auth.currentUser == null) {
+      _setError('You must be logged in to add homework.');
+      return false;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('homework')
+        .doc(homework.id)
+        .set(homework.toMap());
+
+    await addUserActivity(
+      'homework_added',
+      'Homework Added',
+      'You added: ${homework.title}',
+      data: {'homeworkId': homework.id, 'subject': homework.subject},
+    );
+
+    notifyListeners();
+    return true;
+  } catch (e) {
+    _setError('Failed to add homework. Please try again.');
+    return false;
+  } finally {
+    _setLoading(false);
+  }
+}
+
+Stream<QuerySnapshot> getHomework() {
+  try {
+    if (_auth.currentUser == null) {
+      return const Stream.empty();
+    }
+    
+    return _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('homework')
+        .orderBy('dueDate', descending: false)
+        .snapshots()
+        .handleError((error) {
+          _setError('Failed to load homework.');
+          return const Stream.empty();
+        });
+  } catch (e) {
+    _setError('Failed to get homework.');
+    return const Stream.empty();
+  }
+}
+
+Future<bool> updateHomeworkStatus(String homeworkId, bool isCompleted) async {
+  _setLoading(true);
+  _clearError();
+  
+  try {
+    if (_auth.currentUser == null) {
+      _setError('You must be logged in to update homework.');
+      return false;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('homework')
+        .doc(homeworkId)
+        .update({'isCompleted': isCompleted});
+
+    // Update study stats when homework is completed
+    if (isCompleted) {
+      await updateUserStats(studyHours: 0.5); // 30 minutes per assignment
+    }
+
+    notifyListeners();
+    return true;
+  } catch (e) {
+    _setError('Failed to update homework. Please try again.');
+    return false;
+  } finally {
+    _setLoading(false);
+  }
+}
+
+Future<bool> deleteHomework(String homeworkId) async {
+  _setLoading(true);
+  _clearError();
+  
+  try {
+    if (_auth.currentUser == null) {
+      _setError('You must be logged in to delete homework.');
+      return false;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .collection('homework')
+        .doc(homeworkId)
+        .delete();
+
+    notifyListeners();
+    return true;
+  } catch (e) {
+    _setError('Failed to delete homework. Please try again.');
+    return false;
+  } finally {
+    _setLoading(false);
+  }
+}
+
+
+
+  // Add to your existing FirebaseService class
+
+Stream<DocumentSnapshot> getUserDataStream() {
+  try {
+    if (_auth.currentUser == null) {
+      return const Stream.empty();
+    }
+    
+    return _firestore
+        .collection('users')
+        .doc(_auth.currentUser!.uid)
+        .snapshots()
+        .handleError((error) {
+          _setError('Failed to load user data.');
+          return const Stream.empty();
+        });
+  } catch (e) {
+    _setError('Failed to get user data stream.');
+    return const Stream.empty();
+  }
+}
   // ========== STORY LIKE METHODS ==========
 
   Future<void> likeStory(String storyId, String storyOwnerId) async {

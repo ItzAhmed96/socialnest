@@ -14,6 +14,7 @@ import 'story_screen.dart';
 import 'stories_section.dart';
 import 'saved_posts_screen.dart';
 import '../widgets/skeleton_loader.dart'; // NEW: Import skeleton loader
+import 'productivity_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -817,8 +818,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   Navigator.push(context, MaterialPageRoute(builder: (_) => const ExploreScreen()));
                 }),
                 _buildFloatingActionButton(),
-                _buildNavItem(Icons.people_rounded, 'Friends', 2, () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const FriendsScreen()));
+                _buildNavItem(Icons.work_outline_rounded, 'Tools', 2, () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductivityScreen()));
                 }),
                 _buildNavItem(Icons.person_rounded, 'Profile', 3, () {
                   Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
